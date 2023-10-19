@@ -7,6 +7,8 @@ import multer from "multer";
 import path from "path";
 import crypto from "crypto";
 
+import { Types } from "mongoose";
+
 const app = express();
 const port = 3000;
 
@@ -18,8 +20,10 @@ const conn = mongoose.createConnection(mongoURI);
 let gfs;
 
 conn.once('open', function () {
-    gfs = Grid(conn.db, mongoose.mongo);
-    gfs.collection(`uploads`);
+    // gfs = Grid(conn.db, mongoose.mongo);
+    gfs = new mongoose.mongo.GridFSBucket(conn.db, { //Note
+        bucketName: "uploads"
+    });
 });
 
 const storage = new GridFsStorage({
@@ -44,13 +48,92 @@ const storage = new GridFsStorage({
 const upload = multer({storage});
 
 
-app.get("/", (req, res) => {
-    res.render("index.ejs");
+app.get("/", async (req, res) => {
+    try{
+        const files = await conn.db.collection('uploads.files').find().toArray(); // Note
+        if(!files || files.length === 0){
+            res.render("index.ejs", {files: false});
+        }
+        else{
+            files.map(file => {
+                if(file.contentType === "image/jpeg" || file.contentType === "image/png"){
+                    file.isImage = true;
+                }
+                else{
+                    file.isImage = false;
+                }
+            });
+            res.render("index.ejs", {files: files});
+        }
+        // res.render("index.ejs", {files: false})
+    }catch(err){
+        res.status(404).json({err: err.message});
+    }
 });
 
 app.post("/upload", upload.single('file'), (req, res) => {
-    console.log(req.body);
-    res.json({file: req.file});
+    console.log(req.file);
+    res.redirect("/");
+    
+});
+
+app.get("/files", async (req,res) => {
+    try{
+        const files = await conn.db.collection('uploads.files').find().toArray();
+        if(!files || files.length === 0){
+            res.json({error: "No files found"});
+        }
+        else{
+            res.json({files});
+        }
+    }catch(err){
+        res.status(404).json({err: err.message});
+    }
+});
+
+app.get("/files/:filename", async (req,res) => {
+    try{
+        const file = await gfs.find({filename: req.params.filename}).toArray(); //Note
+        if(!file || file.length === 0){
+            res.json({error: "No file found"});
+        }
+        else{
+            res.json({File: file});
+        }
+    }catch(err){
+        res.status(404).send({Error: err.message});
+    }
+});
+
+app.get("/image/:filename", async (req,res) => {
+    try{
+        const file = await gfs.find({filename: req.params.filename}).toArray();
+        if(!file || file.length === 0){
+            res.json({error: "No file found"});
+        }
+        else{
+            if(file[0].contentType == "image/jpeg" || file[0].contentType == "image/png"){
+                const readstream = gfs.openDownloadStreamByName(req.params.filename);
+                readstream.pipe(res);
+            }
+            else{
+                res.json({NotImage: "Not an image"});
+            }
+        }
+    }catch(err){
+        res.status(404).send({Error: err.message});
+    }
+});
+
+app.post("/files/:fileId", async (req,res) => {
+    try{
+        const ObjectId = mongoose.Types.ObjectId; // Note
+        await gfs.delete(new ObjectId(req.params.fileId));//Note
+        console.log('successfully deleted');
+        res.redirect("/");
+    }catch(err){
+        res.status(404).json({error: err.message});
+    }
 });
 
 app.listen(port, ()=>{
